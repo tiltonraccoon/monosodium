@@ -20,7 +20,12 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+#![macro_use]
+extern crate env_logger;
+extern crate log;
+
 use clap::Parser;
+use log::{error, info, warn};
 use reqwest::Error;
 use serde::{Deserialize, Serialize};
 use std::fs::{create_dir_all, File};
@@ -37,8 +42,6 @@ struct Opts {
     user_id: u32,
     #[clap(short, long)]
     directory: String,
-    #[clap(short, long)]
-    progress: bool
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -103,7 +106,7 @@ async fn archive_post(post: &Post, out_path: PathBuf) -> Result<(), Error> {
                 let url = url.to_owned();
                 match out_path.file_name() {
                     Some(output_file_name) => {
-                        println!("downloading {} to file: {:?}", &url, output_file_name);
+                        info!("downloading {} to file: {:?}", &url, output_file_name);
                         match reqwest::get(&url).await {
                             Ok(response) => {
                                 if let Ok(bytes) = response.bytes().await {
@@ -111,19 +114,19 @@ async fn archive_post(post: &Post, out_path: PathBuf) -> Result<(), Error> {
                                 }
                             }
                             Err(e) => {
-                                println!("ERROR: Could not fetch url {}: {:?}", &url, e)
+                                error!("Could not fetch url {}: {:?}", &url, e)
                             }
                         }
                     }
                     None => {
-                        println!("ERROR: Could not get output file path: {:?}", out_path);
+                        error!("Could not get output file path: {:?}", out_path);
                     }
                 }
                 // Force a sleep, don't pound the server!
                 std::thread::sleep(std::time::Duration::from_millis(1500));
             }
             Err(e) => {
-                println!("ERROR: {:?}", e);
+                error!("{:?}", e);
             }
         }
     }
@@ -132,11 +135,16 @@ async fn archive_post(post: &Post, out_path: PathBuf) -> Result<(), Error> {
 }
 
 fn favorites_url(user_id: u32, page: usize) -> String {
-    format!("https://e621.net/favorites.json?user_id={}&page={}", user_id, page)
+    format!(
+        "https://e621.net/favorites.json?user_id={}&page={}",
+        user_id, page
+    )
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
+    env_logger::init();
+
     let opts: Opts = Opts::parse();
 
     let client = reqwest::Client::builder().user_agent(USER_AGENT).build()?;
@@ -148,18 +156,11 @@ async fn main() -> Result<(), Error> {
     let mut page: usize = 1;
 
     loop {
-        if opts.progress {
-            println!("------------ Checking favorites page {:2} -------------------------", page);
-        }
+        info!("Checking favorites page {:2}", page);
 
         let url = favorites_url(opts.user_id, page);
 
-        let response = client
-            .get(&url)
-            .send()
-            .await?
-            .json::<ApiResponse>()
-            .await?;
+        let response = client.get(&url).send().await?.json::<ApiResponse>().await?;
 
         if response.posts.is_empty() {
             break;
@@ -171,9 +172,10 @@ async fn main() -> Result<(), Error> {
 
         while let Some(post) = stream.next().await {
             if post.flags.deleted {
-                if opts.progress {
-                    println!("*** notice: favorite #{} has been deleted.", post.id);
-                }
+                warn!(
+                    "favorite #{} has been marked deleted on e621.net, skipping.",
+                    post.id
+                );
             } else {
                 let image_file = format!("{}.{}", post.file.md5, post.file.ext);
                 let tags_file = format!("{}.json", post.file.md5);
