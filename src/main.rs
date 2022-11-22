@@ -104,22 +104,15 @@ async fn archive_post(post: &Post, out_path: PathBuf) -> Result<(), Error> {
                 // Since this uses async code, and we don't want this function
                 // to be async itself, we must spawn an async closure.
                 let url = url.to_owned();
-                match out_path.file_name() {
-                    Some(output_file_name) => {
-                        info!("downloading {} to file: {:?}", &url, output_file_name);
-                        match reqwest::get(&url).await {
-                            Ok(response) => {
-                                if let Ok(bytes) = response.bytes().await {
-                                    let _ = output.write_all(&bytes);
-                                }
-                            }
-                            Err(e) => {
-                                error!("Could not fetch url {}: {:?}", &url, e)
-                            }
+                info!("downloading {}", &url);
+                match reqwest::get(&url).await {
+                    Ok(response) => {
+                        if let Ok(bytes) = response.bytes().await {
+                            let _ = output.write_all(&bytes);
                         }
                     }
-                    None => {
-                        error!("Could not get output file path: {:?}", out_path);
+                    Err(e) => {
+                        error!("Could not fetch url {}: {:?}", &url, e)
                     }
                 }
                 // Force a sleep, don't pound the server!
