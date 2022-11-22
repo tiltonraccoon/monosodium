@@ -18,7 +18,7 @@ The output binary will be `./target/release/monosodium`
 
 ## Usage
 
-    monosodium --user-id <USER-ID> --directory <DIR> [--progress]
+    monosodium --user-id <USER-ID> --directory <DIR>
 
 The first argument is a *numeric* user id, which you can find from your e621
 profile page.
@@ -27,8 +27,12 @@ The second argument is a local directory where your favorites will be
 downloaded and stored. Metadata about the downloaded posts will be stored in
 JSON files in a subdirectory of this directory, named `metadata`.
 
-The last argument is an optional flag that will enable more verbose progress
-output when iterating over favorites pages.
+## Monitoring Progress
+
+By default, nothing is printed until the archive is complete. To monitor
+progress, you can set the log level to "info" with the following incantation:
+
+    RUST_LOG=info monosodium --user-id <USER-ID> --directory <DIR>
 
 ## Known Limitations
 
