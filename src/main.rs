@@ -1,6 +1,6 @@
 // MIT License
 //
-// Copyright (c) 2021-2022 Tilton Raccoon <tilton@tiltonraccoon.com>
+// Copyright (c) 2021-2023 Tilton Raccoon <tilton@tiltonraccoon.com>
 //
 // Permission is hereby granted, free of charge, to any person obtaining a copy
 // of this software and associated documentation files (the "Software"), to deal
@@ -25,7 +25,7 @@ extern crate env_logger;
 extern crate log;
 
 use clap::Parser;
-use log::{error, info, warn};
+use log::{debug, error, info};
 use reqwest::Error;
 use serde::{Deserialize, Serialize};
 use std::fs::{create_dir_all, File};
@@ -42,6 +42,8 @@ struct Opts {
     user_id: u32,
     #[clap(short, long)]
     directory: String,
+    #[clap(short, long, default_value_t = false)]
+    analyze: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -58,6 +60,9 @@ struct Post {
     tags: Tags,
     rating: String,
     flags: Flags,
+    // Hydrated after fetch
+    file_path: Option<PathBuf>,
+    tags_path: Option<PathBuf>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -89,17 +94,36 @@ struct Flags {
     deleted: bool,
 }
 
-fn archive_metadata(post: &Post, tags_path: PathBuf) {
-    if let Ok(mut tags_file) = File::create(tags_path) {
+impl ApiResponse {
+    pub fn hydrate(&mut self, output: &Path, metadata_dir: &Path) {
+        for mut post in &mut self.posts {
+            let image_file = format!("{}.{}", post.file.md5, post.file.ext);
+            let image_path = output.join(image_file);
+            let tags_file = format!("{}.json", post.file.md5);
+            let tags_path = metadata_dir.join(tags_file);
+            debug!(
+                "Hydrated output path {:?}, tags path {:?}",
+                image_path, tags_path
+            );
+            post.file_path = Some(image_path);
+            post.tags_path = Some(tags_path);
+        }
+    }
+}
+
+fn archive_metadata(post: &Post) {
+    let path = &post.tags_path;
+    if let Ok(mut tags_file) = File::create(path.as_ref().unwrap()) {
         let _ = tags_file.write_all(serde_json::to_string_pretty(&post).unwrap().as_bytes());
     }
 }
 
-async fn archive_post(post: &Post, out_path: PathBuf) -> Result<(), Error> {
+async fn archive_post(post: &Post) -> Result<(), Error> {
     // This isn't really async, we block and download only one image
     // at a time.
+    let path = &post.file_path;
     if let Some(url) = &post.file.url {
-        match File::create(&out_path) {
+        match File::create(path.as_ref().unwrap()) {
             Ok(mut output) => {
                 // Since this uses async code, and we don't want this function
                 // to be async itself, we must spawn an async closure.
@@ -153,37 +177,42 @@ async fn main() -> Result<(), Error> {
 
         let url = favorites_url(opts.user_id, page);
 
-        let response = client.get(&url).send().await?.json::<ApiResponse>().await?;
+        let mut response = client.get(&url).send().await?.json::<ApiResponse>().await?;
 
         if response.posts.is_empty() {
             break;
         }
 
+        response.hydrate(directory, &metadata_dir);
+
         page += 1;
 
-        let mut stream = tokio_stream::iter(response.posts);
+        let downloadable_posts: Vec<&Post> = response
+            .posts
+            .iter()
+            .filter(|x| {
+                x.file.url.is_some()
+                    && x.file_path.is_some()
+                    && !x.file_path.as_ref().unwrap().exists()
+            })
+            .collect();
+
+        let count = downloadable_posts.len();
+        match count {
+            0 => info!("No images to download"),
+            1 => info!("1 image to download"),
+            n => info!("{n} images to download"),
+        };
+
+        let mut stream = tokio_stream::iter(downloadable_posts);
 
         while let Some(post) = stream.next().await {
-            if post.flags.deleted {
-                warn!(
-                    "favorite #{} has been marked deleted on e621.net, skipping.",
-                    post.id
-                );
-            } else {
-                let image_file = format!("{}.{}", post.file.md5, post.file.ext);
-                let tags_file = format!("{}.json", post.file.md5);
-                let image_path = directory.join(image_file);
-                let tags_path = metadata_dir.join(tags_file);
-                if !image_path.exists() {
-                    archive_post(&post, image_path).await?;
-                }
-                // Always re-archive the JSON, since tags may have been updated since last time.
-                archive_metadata(&post, tags_path);
-            }
+            archive_post(post).await?;
+            archive_metadata(post);
         }
 
         // Force a sleep between page fetches, don't pound the server!
-        std::thread::sleep(std::time::Duration::from_millis(1000));
+        std::thread::sleep(std::time::Duration::from_millis(1500));
     }
 
     println!("Done! Enjoy that offline archive!");
