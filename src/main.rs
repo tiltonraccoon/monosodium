@@ -90,7 +90,7 @@ struct Flags {
 }
 
 fn archive_metadata(post: &Post, tags_path: PathBuf) {
-    if let Ok(mut tags_file) = File::create(&tags_path) {
+    if let Ok(mut tags_file) = File::create(tags_path) {
         let _ = tags_file.write_all(serde_json::to_string_pretty(&post).unwrap().as_bytes());
     }
 }
